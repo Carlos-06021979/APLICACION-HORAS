@@ -1,6 +1,6 @@
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { useAppContext } from "../../context/AppContext";
-import { Save, Download, Upload } from "lucide-react";
+import { Save, Download, Upload, Plus, Trash2, Calendar } from "lucide-react";
 
 const SettingsView = () => {
   const {
@@ -9,11 +9,16 @@ const SettingsView = () => {
     records,
     advances,
     setAdvances,
+    holidays,
+    addHoliday,
+    deleteHoliday,
     updateAllRecordsSettings,
   } = useAppContext();
-  const [advMonth, setAdvMonth] = React.useState(
+  const [advMonth, setAdvMonth] = useState(
     new Date().toISOString().slice(0, 7),
   );
+  const [newHoliDate, setNewHoliDate] = useState("");
+  const [newHoliName, setNewHoliName] = useState("");
   const fileInputRef = useRef(null);
 
   const handleExport = () => {
@@ -159,7 +164,19 @@ const SettingsView = () => {
                 />
               </div>
               <div className="form-group">
-                <label className="text-sm">Dom / Festivo</label>
+                <label className="text-sm">Hora Festiva</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={settings.rateFestive ?? settings.rateSunday ?? 11.31}
+                  onChange={(e) =>
+                    handleNumberInput("rateFestive", e.target.value)
+                  }
+                  className="w-full mt-1"
+                />
+              </div>
+              <div className="form-group">
+                <label className="text-sm">Hora Domingo</label>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -183,7 +200,7 @@ const SettingsView = () => {
                 />
               </div>
               <div className="form-group">
-                <label className="text-sm">Plus Nocturno</label>
+                <label className="text-sm">Plus Nocturno (€/h)</label>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -222,6 +239,33 @@ const SettingsView = () => {
             </div>
           </section>
         )}
+
+        <section>
+          <h3 className="section-title">🌙 Horario Nocturno</h3>
+          <p className="text-xs text-gray-400 mb-3">
+            Define la franja horaria que la aplicación considerará como nocturna para calcular el Plus Nocturno.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="form-group">
+              <label className="text-sm font-medium">Inicio Nocturnidad</label>
+              <input
+                type="time"
+                value={settings.nightStart || "22:00"}
+                onChange={(e) => updateSetting("nightStart", e.target.value)}
+                className="w-full mt-1"
+              />
+            </div>
+            <div className="form-group">
+              <label className="text-sm font-medium">Fin Nocturnidad</label>
+              <input
+                type="time"
+                value={settings.nightEnd || "06:00"}
+                onChange={(e) => updateSetting("nightEnd", e.target.value)}
+                className="w-full mt-1"
+              />
+            </div>
+          </div>
+        </section>
 
         {settings.salaryType !== "fixed" && (
           <section>
@@ -431,20 +475,101 @@ const SettingsView = () => {
         </section>
 
         <section>
+          <h3 className="section-title">📅 Festivos Locales / Nacionales</h3>
+          <p className="text-xs text-gray-400 mb-3">
+            Añade festivos de tu municipio o comunidad para que la app aplique la tarifa de Hora Festiva automáticamente.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <input
+              type="date"
+              value={newHoliDate}
+              onChange={(e) => setNewHoliDate(e.target.value)}
+              className="w-full text-sm"
+            />
+            <input
+              type="text"
+              placeholder="Nombre del festivo (ej: San Ginés / Cartagena)"
+              value={newHoliName}
+              onChange={(e) => setNewHoliName(e.target.value)}
+              className="w-full text-sm"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (newHoliDate) {
+                  addHoliday(newHoliDate, newHoliName);
+                  setNewHoliDate("");
+                  setNewHoliName("");
+                }
+              }}
+              className="btn-primary flex items-center justify-center gap-1 py-2 text-sm"
+            >
+              <Plus size={16} /> Añadir Festivo
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-800/40 rounded-xl border border-gray-100 dark:border-gray-800">
+            {Object.keys(holidays || {}).length === 0 ? (
+              <span className="text-xs text-gray-400 p-2">No hay festivos guardados.</span>
+            ) : (
+              Object.entries(holidays)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([dStr, name]) => (
+                  <div
+                    key={dStr}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-full text-xs font-semibold border border-teal-100 dark:border-teal-900/50"
+                  >
+                    <span>📅 {dStr}: {name}</span>
+                    <button
+                      type="button"
+                      onClick={() => deleteHoliday(dStr)}
+                      className="text-teal-500 hover:text-rose-500 transition-colors"
+                      title="Eliminar festivo"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))
+            )}
+          </div>
+        </section>
+
+        <section>
           <h3 className="section-title">Preferencias Diarias</h3>
-          <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-            <span>¿Almuerzo remunerado por defecto?</span>
-            <label className="toggle-switch">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <span>¿Almuerzo remunerado por defecto?</span>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={settings.paidLunchDefault}
+                  onChange={(e) => {
+                    updateSetting("paidLunchDefault", e.target.checked);
+                    updateAllRecordsSettings({ paidLunch: e.target.checked });
+                  }}
+                />
+                <span className="slider round"></span>
+              </label>
+            </div>
+
+            <div className="form-group p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <label className="text-sm font-medium block mb-1">
+                Descanso / Bocadillo no pagado por defecto (minutos)
+              </label>
               <input
-                type="checkbox"
-                checked={settings.paidLunchDefault}
-                onChange={(e) => {
-                  updateSetting("paidLunchDefault", e.target.checked);
-                  updateAllRecordsSettings({ paidLunch: e.target.checked });
-                }}
+                type="text"
+                inputMode="numeric"
+                placeholder="Ej: 15, 30, 45"
+                value={settings.breakMinutesDefault ?? 0}
+                onChange={(e) =>
+                  handleNumberInput("breakMinutesDefault", e.target.value)
+                }
+                className="w-full mt-1"
               />
-              <span className="slider round"></span>
-            </label>
+              <p className="text-xs text-gray-400 mt-1">
+                Se restará automáticamente del cómputo de horas de trabajo efectivo del día.
+              </p>
+            </div>
           </div>
         </section>
 

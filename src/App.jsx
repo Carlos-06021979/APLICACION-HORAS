@@ -3,6 +3,7 @@ import { AppProvider, useAppContext } from "./context/AppContext";
 import Layout from "./components/layout/Layout";
 import Dashboard from "./components/dashboard/Dashboard";
 import HistoryView from "./components/history/HistoryView";
+import PayrollComparator from "./components/comparator/PayrollComparator";
 import SettingsView from "./components/settings/SettingsView";
 
 const AppContent = () => {
@@ -32,6 +33,8 @@ const AppContent = () => {
         return <Dashboard />;
       case "history":
         return <HistoryView />;
+      case "comparator":
+        return <PayrollComparator />;
       case "settings":
         return <SettingsView />;
       default:

@@ -7,6 +7,7 @@ import {
   eachDayOfInterval,
 } from "date-fns";
 import { es } from "date-fns/locale";
+import { timeToDecimal, calculateSegmentEarnings } from "../../utils/timeUtils";
 import { useAppContext, entryTypes } from "../../context/AppContext";
 import {
   Calendar,
@@ -17,6 +18,8 @@ import {
   X,
   Pencil,
   Check,
+  Download,
+  Printer,
 } from "lucide-react";
 
 const HistoryView = () => {
@@ -24,6 +27,8 @@ const HistoryView = () => {
     records,
     settings,
     advances,
+    otherIncome,
+    setOtherIncomeValue,
     absences,
     setAbsenceValue,
     calculateDayTotalDecimal,
@@ -94,7 +99,7 @@ const HistoryView = () => {
     const end = endOfMonth(date);
     const daysInMonth = eachDayOfInterval({ start, end });
 
-    let totals = { normal: 0, extra: 0, sunday: 0, night: 0, total: 0 };
+    let totals = { normal: 0, extra: 0, sunday: 0, festive: 0, night: 0, total: 0 };
     const days = daysInMonth
       .map((dayDate) => {
         const dateStr = format(dayDate, "yyyy-MM-dd");
@@ -103,6 +108,7 @@ const HistoryView = () => {
         totals.normal += breakdown.normal;
         totals.extra += breakdown.extra;
         totals.sunday += breakdown.sunday;
+        totals.festive += breakdown.festive || 0;
         totals.night += breakdown.night;
         totals.total += breakdown.total;
 
@@ -117,13 +123,15 @@ const HistoryView = () => {
 
     const baseGross = totals.normal * settings.hourlyRate;
     const sundayGross = totals.sunday * settings.rateSunday;
+    const festiveGross = totals.festive * (settings.rateFestive ?? settings.rateSunday ?? 11.31);
     const extraGross = totals.extra * settings.rateOvertime;
     const nightPlus = totals.night * (settings.rateNightPlus || 0);
     const smiPlus = totals.normal * (settings.rateSmiPlus || 0);
     const suprPlus = totals.total * (settings.hourlyBonus || 0);
 
+    const bonusOther = Number(otherIncome[selectedMonth] || 0);
     const gross =
-      baseGross + sundayGross + extraGross + nightPlus + smiPlus + suprPlus;
+      baseGross + sundayGross + festiveGross + extraGross + nightPlus + smiPlus + suprPlus + bonusOther;
 
     const irpf = gross * (settings.irpfPercent / 100);
     const ss = gross * (settings.socialSecurityPercent / 100);
@@ -138,21 +146,63 @@ const HistoryView = () => {
       totals,
       baseGross,
       sundayGross,
+      festiveGross,
       extraGross,
       nightPlus,
       smiPlus,
+      bonusOther,
       gross,
       advance,
       net,
       deductions: { irpf, ss, unemp, mei },
     };
-  }, [selectedMonth, records, settings, calculateDayTotalDecimal]);
+  }, [selectedMonth, records, settings, advances, otherIncome, calculateDayTotalDecimal]);
+
+  const handleExportCSV = () => {
+    if (!monthData.days || monthData.days.length === 0) {
+      alert("No hay registros que exportar en este mes.");
+      return;
+    }
+
+    const headers = [
+      "Fecha",
+      "Día de la semana",
+      "Horas Totales (h)",
+      "Horas Nocturnas (h)",
+      "Festivo",
+      "Detalle de Fichajes",
+    ];
+    const rows = monthData.days.map((d) => {
+      const dayName = format(d.date, "EEEE", { locale: es });
+      const entriesStr = (d.record.entries || [])
+        .map((e) => `${e.time} (${e.type})`)
+        .join(" | ");
+      return [
+        d.dateStr,
+        dayName,
+        d.breakdown.total.toFixed(2),
+        d.breakdown.night.toFixed(2),
+        d.breakdown.festive > 0 || d.breakdown.sunday > 0 ? "SÍ" : "NO",
+        `"${entriesStr}"`,
+      ].join(";");
+    });
+
+    const csvContent =
+      "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(";"), ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `parte_de_horas_${selectedMonth}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
 
   return (
-    <div className="history-view animate-fade-in">
-      <div className="flex justify-between items-center mb-6">
+    <div className="history-view animate-fade-in space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <h2 className="view-title mb-0">Resumen y Finanzas</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             type="month"
             value={selectedMonth}
@@ -160,13 +210,29 @@ const HistoryView = () => {
             className="month-picker"
           />
           {monthData.days.length > 0 && (
-            <button
-              onClick={() => deleteMonth(selectedMonth)}
-              className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors border border-rose-100 dark:border-rose-900/40"
-              title="Borrar todo el mes"
-            >
-              <Trash2 size={20} />
-            </button>
+            <>
+              <button
+                onClick={handleExportCSV}
+                className="p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors border border-indigo-100 dark:border-indigo-900/40 flex items-center gap-1 text-xs font-semibold"
+                title="Exportar parte de horas en CSV"
+              >
+                <Download size={16} /> CSV
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors border border-gray-200 dark:border-gray-700 flex items-center gap-1 text-xs font-semibold"
+                title="Imprimir resumen"
+              >
+                <Printer size={16} />
+              </button>
+              <button
+                onClick={() => deleteMonth(selectedMonth)}
+                className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-colors border border-rose-100 dark:border-rose-900/40"
+                title="Borrar todo el mes"
+              >
+                <Trash2 size={18} />
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -353,9 +419,17 @@ const HistoryView = () => {
           </div>
           {monthData.totals.sunday > 0 && (
             <div className="flex justify-between items-center text-amber-600 dark:text-amber-400 text-sm">
-              <span>H. Festivas ({monthData.totals.sunday.toFixed(2)}h)</span>
+              <span>H. Domingo ({monthData.totals.sunday.toFixed(2)}h)</span>
               <span className="font-medium">
                 {monthData.sundayGross.toFixed(2)}€
+              </span>
+            </div>
+          )}
+          {monthData.totals.festive > 0 && (
+            <div className="flex justify-between items-center text-teal-600 dark:text-teal-400 text-sm">
+              <span>H. Festivas ({monthData.totals.festive.toFixed(2)}h)</span>
+              <span className="font-medium">
+                {monthData.festiveGross.toFixed(2)}€
               </span>
             </div>
           )}
@@ -375,12 +449,29 @@ const HistoryView = () => {
           </div>
           {monthData.nightPlus > 0 && (
             <div className="flex justify-between items-center text-blue-500 text-sm">
-              <span>Plus Nocturnidad</span>
+              <span>Plus Nocturnidad ({monthData.totals.night.toFixed(2)}h)</span>
               <span className="font-medium">
                 {monthData.nightPlus.toFixed(2)}€
               </span>
             </div>
           )}
+
+          <div className="flex justify-between items-center text-emerald-600 dark:text-emerald-400 text-sm">
+            <span className="font-medium">Otros Devengos / Complementos Puntuales</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={otherIncome[selectedMonth] || ""}
+              onChange={(e) => {
+                const val = e.target.value.replace(",", ".");
+                if (val === "" || /^\d*\.?\d*$/.test(val)) {
+                  setOtherIncomeValue(selectedMonth, val);
+                }
+              }}
+              className="w-24 text-right py-0.5 px-2 text-xs rounded border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/30 font-bold"
+            />
+          </div>
 
           <div className="flex justify-between items-center text-gray-800 dark:text-gray-100 font-semibold border-t border-gray-50 dark:border-gray-800/50 pt-2">
             <span>Total Bruto</span>
@@ -532,6 +623,7 @@ const HistoryView = () => {
                     let cumulativeHours = 0;
                     let currentStart = null;
                     const isSunday = day.date.getDay() === 0;
+                    const isFestivo = Boolean(day.record?.isFestivo);
 
                     return day.record.entries
                       .sort((a, b) => a.time.localeCompare(b.time))
@@ -547,61 +639,25 @@ const HistoryView = () => {
                           const duration =
                             entry.timeDecimal - currentStart.timeDecimal;
 
-                          // Nocturnity calculation (22-06)
-                          const startH = currentStart.timeDecimal;
-                          const endH = entry.timeDecimal;
-                          let nightInTramo = 0;
-                          nightInTramo += Math.max(
-                            0,
-                            Math.min(endH, 6) - startH,
-                          );
-                          nightInTramo += Math.max(
-                            0,
-                            endH - Math.max(startH, 22),
-                          );
+                          if (duration > 0) {
+                            const seg = calculateSegmentEarnings(
+                              duration,
+                              currentStart.timeDecimal,
+                              entry.timeDecimal,
+                              isSunday,
+                              isFestivo,
+                              settings,
+                              cumulativeHours
+                            );
 
-                          // Financials for this segment
-                          const hoursRemainingNormal = Math.max(
-                            0,
-                            9 - cumulativeHours,
-                          );
-                          const normalInSegment = isSunday
-                            ? 0
-                            : Math.min(duration, hoursRemainingNormal);
-                          const extraInSegment = isSunday
-                            ? 0
-                            : Math.max(0, duration - normalInSegment);
-                          const sundayInSegment = isSunday ? duration : 0;
+                            earnings = {
+                              gross: seg.gross,
+                              net: seg.net,
+                              durationStr: `${Math.floor(duration)}h ${Math.round((duration % 1) * 60)}m`,
+                            };
 
-                          const baseG =
-                            normalInSegment * Number(settings.hourlyRate);
-                          const sundayG =
-                            sundayInSegment * Number(settings.rateSunday);
-                          const extraG =
-                            extraInSegment * Number(settings.rateOvertime);
-                          const nightP =
-                            nightInTramo * Number(settings.rateNightPlus || 0);
-                          const smiP =
-                            normalInSegment * Number(settings.rateSmiPlus || 0);
-                          const suprP =
-                            duration * Number(settings.hourlyBonus || 0);
-
-                          const gross =
-                            baseG + sundayG + extraG + nightP + smiP + suprP;
-                          const deductions =
-                            Number(settings.irpfPercent) +
-                            Number(settings.socialSecurityPercent) +
-                            Number(settings.unemploymentPercent) +
-                            Number(settings.meiPercent || 0);
-                          const net = gross * (1 - deductions / 100);
-
-                          earnings = {
-                            gross,
-                            net,
-                            durationStr: `${Math.floor(duration)}h ${Math.round((duration % 1) * 60)}m`,
-                          };
-
-                          cumulativeHours += duration;
+                            cumulativeHours += duration;
+                          }
                           currentStart = null;
                         }
 

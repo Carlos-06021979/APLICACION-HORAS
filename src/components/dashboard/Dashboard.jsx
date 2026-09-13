@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { useAppContext, entryTypes } from "../../context/AppContext";
-import { timeToDecimal } from "../../utils/timeUtils";
+import { timeToDecimal, calculateSegmentEarnings } from "../../utils/timeUtils";
 import {
   PlusCircle,
   Trash2,
@@ -20,6 +20,7 @@ const Dashboard = () => {
     addEntry,
     deleteEntry,
     updateEntry,
+    updateDaySettings,
     calculateDayTotalDecimal,
   } = useAppContext();
   const [currentTime, setCurrentTime] = useState("");
@@ -166,6 +167,7 @@ const Dashboard = () => {
     const sorted = entriesForCalc.sort((a, b) => a.time.localeCompare(b.time));
     const dateObj = new Date(selectedDate);
     const isSunday = dateObj.getDay() === 0;
+    const isFestivo = Boolean(dateRecord.isFestivo);
     let cumulativeHours = 0;
     let currentStart = null;
     let currentLunchOutTime = null;
@@ -186,37 +188,17 @@ const Dashboard = () => {
           const duration = entry.timeDecimal - currentLunchOutTime;
 
           if (duration > 0) {
-            const hoursRemainingNormal = Math.max(0, 9 - cumulativeHours);
-            const normalInSeg = isSunday
-              ? 0
-              : Math.min(duration, hoursRemainingNormal);
-            const extraInSeg = isSunday
-              ? 0
-              : Math.max(0, duration - normalInSeg);
-            const sundayInSeg = isSunday ? duration : 0;
-
-            const startH = currentLunchOutTime;
-            const endH = entry.timeDecimal;
-            let nightInTramo = Math.max(0, Math.min(endH, 6) - startH);
-            nightInTramo += Math.max(0, endH - Math.max(startH, 22));
-
-            const gross =
-              normalInSeg * Number(settings.hourlyRate) +
-              sundayInSeg * Number(settings.rateSunday) +
-              extraInSeg * Number(settings.rateOvertime) +
-              nightInTramo * Number(settings.rateNightPlus || 0) +
-              normalInSeg * Number(settings.rateSmiPlus || 0) +
-              duration * Number(settings.hourlyBonus || 0);
-
-            const deductions =
-              (Number(settings.irpfPercent) +
-                Number(settings.socialSecurityPercent) +
-                Number(settings.unemploymentPercent) +
-                Number(settings.meiPercent || 0)) /
-              100;
-
-            totalGross += gross;
-            totalNet += gross * (1 - deductions);
+            const seg = calculateSegmentEarnings(
+              duration,
+              currentLunchOutTime,
+              entry.timeDecimal,
+              isSunday,
+              isFestivo,
+              settings,
+              cumulativeHours
+            );
+            totalGross += seg.gross;
+            totalNet += seg.net;
             cumulativeHours += duration;
           }
         }
@@ -228,53 +210,32 @@ const Dashboard = () => {
 
         if (currentStart) {
           const duration = entry.timeDecimal - currentStart.timeDecimal;
-          if (duration <= 0) {
-            currentStart = null;
-            continue;
+          if (duration > 0) {
+            const seg = calculateSegmentEarnings(
+              duration,
+              currentStart.timeDecimal,
+              entry.timeDecimal,
+              isSunday,
+              isFestivo,
+              settings,
+              cumulativeHours
+            );
+            totalGross += seg.gross;
+            totalNet += seg.net;
+            cumulativeHours += duration;
           }
-
-          const hoursRemainingNormal = Math.max(0, 9 - cumulativeHours);
-          const normalInSeg = isSunday
-            ? 0
-            : Math.min(duration, hoursRemainingNormal);
-          const extraInSeg = isSunday ? 0 : Math.max(0, duration - normalInSeg);
-          const sundayInSeg = isSunday ? duration : 0;
-
-          const startH = currentStart.timeDecimal;
-          const endH = entry.timeDecimal;
-          let nightInTramo = Math.max(0, Math.min(endH, 6) - startH);
-          nightInTramo += Math.max(0, endH - Math.max(startH, 22));
-
-          const gross =
-            normalInSeg * Number(settings.hourlyRate) +
-            sundayInSeg * Number(settings.rateSunday) +
-            extraInSeg * Number(settings.rateOvertime) +
-            nightInTramo * Number(settings.rateNightPlus || 0) +
-            normalInSeg * Number(settings.rateSmiPlus || 0) +
-            duration * Number(settings.hourlyBonus || 0);
-
-          const deductions =
-            (Number(settings.irpfPercent) +
-              Number(settings.socialSecurityPercent) +
-              Number(settings.unemploymentPercent) +
-              Number(settings.meiPercent || 0)) /
-            100;
-
-          totalGross += gross;
-          totalNet += gross * (1 - deductions);
-          cumulativeHours += duration;
           currentStart = null;
         }
       }
     }
 
     return { gross: totalGross, net: totalNet, isLive };
-  }, [safeEntries, liveSession, currentTime, settings, selectedDate]);
+  }, [safeEntries, liveSession, currentTime, settings, selectedDate, dateRecord]);
 
   return (
     <div className="dashboard-view animate-fade-in">
       <div className="card date-header">
-        <div className="flex justify-center items-center w-full mb-3 mt-1">
+        <div className="flex flex-col items-center gap-2 w-full mb-3 mt-1">
           <div
             onClick={handleDateClick}
             className="relative inline-flex items-center gap-3 px-4 py-2 rounded-2xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer group"
@@ -297,6 +258,23 @@ const Dashboard = () => {
               style={{ padding: 0, margin: 0 }}
             />
           </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              updateDaySettings(selectedDate, {
+                isFestivo: !dateRecord.isFestivo,
+              })
+            }
+            className={`px-3 py-1 text-xs font-semibold rounded-full transition-all flex items-center gap-1.5 ${
+              dateRecord.isFestivo
+                ? "bg-teal-500 text-white shadow-sm"
+                : "bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+            }`}
+          >
+            <span>📅</span>
+            <span>{dateRecord.isFestivo ? "Día Festivo Activo" : "Marcar como Día Festivo"}</span>
+          </button>
         </div>
         <div className="current-time text-4xl font-light tracking-wider my-2">
           {currentTime}
@@ -344,6 +322,21 @@ const Dashboard = () => {
                 Se registrará el día completo sin hora específica.
               </p>
             )}
+
+            <div className="mt-3 flex items-center justify-between p-2.5 bg-gray-50 dark:bg-gray-800/60 rounded-xl border border-gray-100 dark:border-gray-800">
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">☕ Descanso / Bocadillo (min no pagados)</span>
+              <input
+                type="number"
+                placeholder="0"
+                value={dateRecord.breakMinutes ?? settings.breakMinutesDefault ?? 0}
+                onChange={(e) =>
+                  updateDaySettings(selectedDate, {
+                    breakMinutes: Number(e.target.value) || 0,
+                  })
+                }
+                className="w-20 text-right text-xs py-1 px-2 font-bold rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+              />
+            </div>
 
             <button
               type="submit"
@@ -417,9 +410,9 @@ const Dashboard = () => {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {totalDecimal.sunday > 0 && (
+                  {(totalDecimal.sunday > 0 || totalDecimal.festive > 0) && (
                     <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] font-bold rounded-full">
-                      FESTIVO: {totalDecimal.sunday.toFixed(2)}h
+                      FESTIVO: {(totalDecimal.sunday + totalDecimal.festive).toFixed(2)}h
                     </span>
                   )}
                   {totalDecimal.extra > 0 && (
@@ -452,8 +445,9 @@ const Dashboard = () => {
               let cumulativeHours = 0;
               let currentStart = null;
               let currentLunchOutTime = null;
-              const dateObj = new Date(selectedDate); // Assuming todayStr should be selectedDate
+              const dateObj = new Date(selectedDate);
               const isSunday = dateObj.getDay() === 0;
+              const isFestivo = Boolean(dateRecord.isFestivo);
 
               return safeEntries
                 .sort((a, b) => a.time.localeCompare(b.time))
@@ -472,54 +466,19 @@ const Dashboard = () => {
                       const duration = entry.timeDecimal - currentLunchOutTime;
 
                       if (duration > 0) {
-                        const hoursRemainingNormal = Math.max(
-                          0,
-                          9 - cumulativeHours,
+                        const seg = calculateSegmentEarnings(
+                          duration,
+                          currentLunchOutTime,
+                          entry.timeDecimal,
+                          isSunday,
+                          isFestivo,
+                          settings,
+                          cumulativeHours
                         );
-                        const normalInSegment = isSunday
-                          ? 0
-                          : Math.min(duration, hoursRemainingNormal);
-                        const extraInSegment = isSunday
-                          ? 0
-                          : Math.max(0, duration - normalInSegment);
-                        const sundayInSegment = isSunday ? duration : 0;
-
-                        const startH = currentLunchOutTime;
-                        const endH = entry.timeDecimal;
-                        let nightInTramo = Math.max(
-                          0,
-                          Math.min(endH, 6) - startH,
-                        );
-                        nightInTramo += Math.max(
-                          0,
-                          endH - Math.max(startH, 22),
-                        );
-
-                        const baseG =
-                          normalInSegment * Number(settings.hourlyRate);
-                        const sundayG =
-                          sundayInSegment * Number(settings.rateSunday);
-                        const extraG =
-                          extraInSegment * Number(settings.rateOvertime);
-                        const nightP =
-                          nightInTramo * Number(settings.rateNightPlus || 0);
-                        const smiP =
-                          normalInSegment * Number(settings.rateSmiPlus || 0);
-                        const suprP =
-                          duration * Number(settings.hourlyBonus || 0);
-
-                        const gross =
-                          baseG + sundayG + extraG + nightP + smiP + suprP;
-                        const deductions =
-                          Number(settings.irpfPercent) +
-                          Number(settings.socialSecurityPercent) +
-                          Number(settings.unemploymentPercent) +
-                          Number(settings.meiPercent || 0);
-                        const net = gross * (1 - deductions / 100);
 
                         earnings = {
-                          gross,
-                          net,
+                          gross: seg.gross,
+                          net: seg.net,
                           duration,
                           durationStr: `${Math.floor(duration)}h ${Math.round((duration % 1) * 60)}m (Almuerzo pagado)`,
                         };
@@ -537,56 +496,26 @@ const Dashboard = () => {
                       const duration =
                         entry.timeDecimal - currentStart.timeDecimal;
 
-                      // Nocturnity calculation (22-06)
-                      const startH = currentStart.timeDecimal;
-                      const endH = entry.timeDecimal;
-                      let nightInTramo = 0;
-                      nightInTramo += Math.max(0, Math.min(endH, 6) - startH);
-                      nightInTramo += Math.max(0, endH - Math.max(startH, 22));
+                      if (duration > 0) {
+                        const seg = calculateSegmentEarnings(
+                          duration,
+                          currentStart.timeDecimal,
+                          entry.timeDecimal,
+                          isSunday,
+                          isFestivo,
+                          settings,
+                          cumulativeHours
+                        );
 
-                      // Financials for this segment
-                      const hoursRemainingNormal = Math.max(
-                        0,
-                        9 - cumulativeHours,
-                      );
-                      const normalInSegment = isSunday
-                        ? 0
-                        : Math.min(duration, hoursRemainingNormal);
-                      const extraInSegment = isSunday
-                        ? 0
-                        : Math.max(0, duration - normalInSegment);
-                      const sundayInSegment = isSunday ? duration : 0;
+                        earnings = {
+                          gross: seg.gross,
+                          net: seg.net,
+                          duration,
+                          durationStr: `${Math.floor(duration)}h ${Math.round((duration % 1) * 60)}m`,
+                        };
 
-                      const baseG =
-                        normalInSegment * Number(settings.hourlyRate);
-                      const sundayG =
-                        sundayInSegment * Number(settings.rateSunday);
-                      const extraG =
-                        extraInSegment * Number(settings.rateOvertime);
-                      const nightP =
-                        nightInTramo * Number(settings.rateNightPlus || 0);
-                      const smiP =
-                        normalInSegment * Number(settings.rateSmiPlus || 0);
-                      const suprP =
-                        duration * Number(settings.hourlyBonus || 0);
-
-                      const gross =
-                        baseG + sundayG + extraG + nightP + smiP + suprP;
-                      const deductions =
-                        Number(settings.irpfPercent) +
-                        Number(settings.socialSecurityPercent) +
-                        Number(settings.unemploymentPercent) +
-                        Number(settings.meiPercent || 0);
-                      const net = gross * (1 - deductions / 100);
-
-                      earnings = {
-                        gross,
-                        net,
-                        duration,
-                        durationStr: `${Math.floor(duration)}h ${Math.round((duration % 1) * 60)}m`,
-                      };
-
-                      cumulativeHours += duration;
+                        cumulativeHours += duration;
+                      }
                       currentStart = null;
                     }
                   }

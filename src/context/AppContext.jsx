@@ -9,7 +9,7 @@ import {
   endOfWeek,
   isWithinInterval,
 } from "date-fns";
-import { timeToDecimal } from "../utils/timeUtils";
+import { timeToDecimal, calculateNightHours } from "../utils/timeUtils";
 
 const AppContext = createContext();
 
@@ -141,8 +141,11 @@ export const AppProvider = ({ children }) => {
     monthlyNet: 0,
     hourlyRate: 8.31,
     rateSunday: 11.31,
+    rateFestive: 11.31,
     rateOvertime: 8.73,
     rateNightPlus: 1.4,
+    nightStart: "22:00",
+    nightEnd: "06:00",
     rateSmiPlus: 0.81,
     hourlyBonus: 0.54,
     irpfPercent: 6.0,
@@ -150,6 +153,7 @@ export const AppProvider = ({ children }) => {
     unemploymentPercent: 1.55,
     meiPercent: 0.12,
     paidLunchDefault: false,
+    breakMinutesDefault: 0,
     theme: "system",
     // Baja configuration (Spanish law defaults)
     coverSicknessGap: false, // Does employer cover days 1-3?
@@ -159,6 +163,49 @@ export const AppProvider = ({ children }) => {
     sicknessCommonPct3: 75, // % received days 21+
     sicknessLaboralPct: 75, // % received laboral accident (from day 1)
   });
+
+  // Festivos oficiales/locales: { "YYYY-MM-DD": "Nombre del festivo" }
+  const defaultHolidays = {
+    "2026-01-01": "Año Nuevo",
+    "2026-01-06": "Reyes Magos",
+    "2026-04-03": "Viernes Santo",
+    "2026-05-01": "Fiesta del Trabajo",
+    "2026-08-15": "Asunción de la Virgen",
+    "2026-10-12": "Fiesta Nacional de España",
+    "2026-11-01": "Todos los Santos",
+    "2026-12-06": "Día de la Constitución",
+    "2026-12-08": "Inmaculada Concepción",
+    "2026-12-25": "Natividad del Señor",
+  };
+  const [holidays, setHolidays] = useLocalStorage(
+    "hoursApp_holidays",
+    defaultHolidays
+  );
+
+  const addHoliday = (dateStr, name) => {
+    setHolidays((prev) => ({ ...prev, [dateStr]: name || "Festivo" }));
+  };
+
+  const deleteHoliday = (dateStr) => {
+    setHolidays((prev) => {
+      const updated = { ...prev };
+      delete updated[dateStr];
+      return updated;
+    });
+  };
+
+  // Otros devengos / atrasos por mes: { "YYYY-MM": number }
+  const [otherIncome, setOtherIncome] = useLocalStorage(
+    "hoursApp_otherIncome",
+    {}
+  );
+
+  const setOtherIncomeValue = (yearMonth, value) => {
+    setOtherIncome((prev) => ({
+      ...prev,
+      [yearMonth]: Number(value) || 0,
+    }));
+  };
 
   // Anticipos por mes: { "YYYY-MM": number }
   const [advances, setAdvances] = useLocalStorage("hoursApp_advances", {});
@@ -270,11 +317,12 @@ export const AppProvider = ({ children }) => {
   const calculateDayTotalDecimal = (dateStr) => {
     const day = records[dateStr];
     if (!day || !day.entries || day.entries.length === 0) {
-      return { total: 0, normal: 0, extra: 0, sunday: 0, night: 0 };
+      return { total: 0, normal: 0, extra: 0, sunday: 0, festive: 0, night: 0 };
     }
 
     const date = parseISO(dateStr);
     const isSunday = date.getDay() === 0; // 0 = Domingo
+    const isFestivo = Boolean(day.isFestivo || holidays[dateStr]);
 
     let totalDecimal = 0;
     let nightDecimal = 0;
@@ -300,21 +348,18 @@ export const AppProvider = ({ children }) => {
           currentLunchOutTime !== null &&
           day.paidLunch
         ) {
-          const lunchDuration = entry.timeDecimal - currentLunchOutTime;
+          let endDecimal = entry.timeDecimal;
+          if (endDecimal < currentLunchOutTime) endDecimal += 24;
+          const lunchDuration = endDecimal - currentLunchOutTime;
           totalDecimal += lunchDuration;
 
-          // Re-check night hours for lunch period if applicable just in case
-          const startH = currentLunchOutTime;
-          const endH = entry.timeDecimal;
-          const nightMorningEnd = 6;
-          const nightEveningStart = 22;
-          let nightInTramo = 0;
-          nightInTramo += Math.max(0, Math.min(endH, nightMorningEnd) - startH);
-          nightInTramo += Math.max(
-            0,
-            endH - Math.max(startH, nightEveningStart),
+          const nightInTramo = calculateNightHours(
+            currentLunchOutTime,
+            entry.timeDecimal,
+            settings.nightStart,
+            settings.nightEnd,
           );
-          nightDecimal += nightInTramo > 0 ? nightInTramo : 0;
+          nightDecimal += nightInTramo;
         }
         currentLunchOutTime = null; // Reset
       } else if (typeInfo.type === "end") {
@@ -324,46 +369,41 @@ export const AppProvider = ({ children }) => {
         }
 
         if (currentStartTime !== null) {
-          const duration = entry.timeDecimal - currentStartTime;
+          let endDecimal = entry.timeDecimal;
+          if (endDecimal < currentStartTime) endDecimal += 24;
+          const duration = endDecimal - currentStartTime;
           totalDecimal += duration;
 
-          // Cálculo de nocturnidad (22:00 a 06:00)
-          // Simplificado: si el tramo toca la noche, calculamos cuánto.
-          const startH = currentStartTime;
-          const endH = entry.timeDecimal;
-
-          // Caso simple: tramo dentro del mismo día
-          // Noche Mañana: 0-6, Noche Tarde: 22-24
-          const nightMorningEnd = 6;
-          const nightEveningStart = 22;
-
-          let nightInTramo = 0;
-          // Intersección con 0-6
-          nightInTramo += Math.max(0, Math.min(endH, nightMorningEnd) - startH);
-          // Intersección con 22-24
-          nightInTramo += Math.max(
-            0,
-            endH - Math.max(startH, nightEveningStart),
+          const nightInTramo = calculateNightHours(
+            currentStartTime,
+            entry.timeDecimal,
+            settings.nightStart,
+            settings.nightEnd,
           );
-
-          nightDecimal += nightInTramo > 0 ? nightInTramo : 0;
+          nightDecimal += nightInTramo;
 
           currentStartTime = null;
         }
       }
     });
 
-    const total = totalDecimal >= 0 ? totalDecimal : 0;
+    const breakMins = Number(day.breakMinutes ?? settings.breakMinutesDefault ?? 0);
+    const breakHours = breakMins / 60;
+    const total = Math.max(0, totalDecimal - breakHours);
+
     let breakdown = {
       total,
       normal: 0,
       extra: 0,
       sunday: 0,
+      festive: 0,
       night: nightDecimal,
     };
 
     if (isSunday) {
       breakdown.sunday = total;
+    } else if (isFestivo) {
+      breakdown.festive = total;
     } else {
       breakdown.normal = Math.min(total, 9);
       breakdown.extra = Math.max(0, total - 9);
@@ -379,8 +419,13 @@ export const AppProvider = ({ children }) => {
       records,
       advances,
       setAdvances,
+      otherIncome,
+      setOtherIncomeValue,
       absences,
       setAbsenceValue,
+      holidays,
+      addHoliday,
+      deleteHoliday,
       addEntry,
       deleteEntry,
       updateEntry,
@@ -389,7 +434,7 @@ export const AppProvider = ({ children }) => {
       updateAllRecordsSettings,
       calculateDayTotalDecimal,
     }),
-    [settings, records, advances, absences],
+    [settings, records, advances, otherIncome, absences, holidays],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -1,5 +1,5 @@
 import React from "react";
-import { Home, History, Settings } from "lucide-react";
+import { Home, History, Scale, Settings } from "lucide-react";
 
 const Layout = ({ children, currentView, setCurrentView }) => {
   return (
@@ -15,21 +15,28 @@ const Layout = ({ children, currentView, setCurrentView }) => {
           className={`nav-btn ${currentView === "dashboard" ? "active" : ""}`}
           onClick={() => setCurrentView("dashboard")}
         >
-          <Home size={24} />
+          <Home size={22} />
           <span>Fichar</span>
         </button>
         <button
           className={`nav-btn ${currentView === "history" ? "active" : ""}`}
           onClick={() => setCurrentView("history")}
         >
-          <History size={24} />
+          <History size={22} />
           <span>Historial</span>
+        </button>
+        <button
+          className={`nav-btn ${currentView === "comparator" ? "active" : ""}`}
+          onClick={() => setCurrentView("comparator")}
+        >
+          <Scale size={22} />
+          <span>Comparar</span>
         </button>
         <button
           className={`nav-btn ${currentView === "settings" ? "active" : ""}`}
           onClick={() => setCurrentView("settings")}
         >
-          <Settings size={24} />
+          <Settings size={22} />
           <span>Ajustes</span>
         </button>
       </nav>
